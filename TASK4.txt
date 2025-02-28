@@ -1,0 +1,77 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Embedding, Flatten, Dot, Dense, Add
+from sklearn.model_selection import train_test_split
+
+# Load MovieLens dataset
+ratings = pd.read_csv("https://files.grouplens.org/datasets/movielens/ml-100k/u.data", 
+                      sep="\t", names=["user_id", "item_id", "rating", "timestamp"])
+ratings.drop(columns=["timestamp"], inplace=True)
+
+# Normalize ratings
+mean_rating = ratings["rating"].mean()
+ratings["rating"] = ratings["rating"] - mean_rating  # Mean-centering
+
+# Adjust indexing to start from 0
+ratings["user_id"] -= 1
+ratings["item_id"] -= 1
+
+# Prepare training data
+num_users = ratings["user_id"].max() + 1
+num_items = ratings["item_id"].max() + 1
+train_data, test_data = train_test_split(ratings, test_size=0.2, random_state=42)
+
+# Define model
+user_input = Input(shape=(1,))
+item_input = Input(shape=(1,))
+
+user_embedding = Embedding(input_dim=num_users, output_dim=50)(user_input)
+item_embedding = Embedding(input_dim=num_items, output_dim=50)(item_input)
+user_bias = Embedding(input_dim=num_users, output_dim=1)(user_input)
+item_bias = Embedding(input_dim=num_items, output_dim=1)(item_input)
+
+user_vec = Flatten()(user_embedding)
+item_vec = Flatten()(item_embedding)
+user_bias_vec = Flatten()(user_bias)
+item_bias_vec = Flatten()(item_bias)
+
+dot_product = Dot(axes=1)([user_vec, item_vec])
+rating_pred = Add()([dot_product, user_bias_vec, item_bias_vec])
+rating_pred = Dense(1, activation='linear')(rating_pred)
+
+model = Model([user_input, item_input], rating_pred)
+model.compile(loss='mse', optimizer='adam')
+
+# Train model
+train_users = train_data["user_id"].values
+train_items = train_data["item_id"].values
+train_ratings = train_data["rating"].values
+
+model.fit([train_users, train_items], train_ratings, epochs=10, batch_size=64, verbose=1)
+
+# Evaluate model
+test_users = test_data["user_id"].values
+test_items = test_data["item_id"].values
+test_ratings = test_data["rating"].values
+predictions = model.predict([test_users, test_items], verbose=0)
+rmse = np.sqrt(np.mean((test_ratings - predictions.flatten()) ** 2))
+print("Test RMSE:", rmse)
+
+# Recommendation function
+def recommend_items(user_id, num_recommendations=5):
+    unique_items = np.arange(num_items)
+    already_rated = ratings[ratings["user_id"] == user_id]["item_id"].tolist()
+    items_to_predict = np.array([iid for iid in unique_items if iid not in already_rated])
+    
+    if len(items_to_predict) == 0:
+        return []
+    
+    predictions = model.predict([np.full(len(items_to_predict), user_id), items_to_predict], verbose=0)
+    item_pred_pairs = sorted(zip(items_to_predict, predictions.flatten()), key=lambda x: x[1], reverse=True)
+    
+    return [item[0] + 1 for item in item_pred_pairs[:num_recommendations]]  # Adjust index back to 1-based
+
+# Example: Get recommendations for user 1
+print("Recommended movies for User 1:", recommend_items(0))
